@@ -845,6 +845,7 @@ export interface ModuleRecord {
   loaded: boolean;
   children: ModuleRecord[];
   paths: string[];
+  parent: ModuleRecord | null;
 }
 
 export interface EngineOptions {
@@ -867,6 +868,7 @@ export interface ResolverFn {
   cache: Record<string, ModuleRecord>;
   extensions: Record<string, unknown>;
   main: ModuleRecord | null;
+  _ownerRecord?: ModuleRecord;
 }
 
 // Mutable copy so packages can monkey-patch frozen polyfill namespaces
@@ -2269,7 +2271,7 @@ function buildResolver(
     throw e;
   };
 
-  const loadModule = (resolved: string): ModuleRecord => {
+  const loadModule = (resolved: string, parentRecord?: ModuleRecord): ModuleRecord => {
     if (cache[resolved]) return cache[resolved];
 
     // Package dedup: reuse first instance of name@version:path to prevent
@@ -2307,7 +2309,9 @@ function buildResolver(
       loaded: false,
       children: [],
       paths: [],
+      parent: parentRecord ?? null,
     };
+    if (parentRecord) parentRecord.children.push(record);
 
     cache[resolved] = record;
 
@@ -2401,6 +2405,7 @@ function buildResolver(
       useFullDeAsync,
     );
     childResolver.cache = cache;
+    childResolver._ownerRecord = record;
 
     const wrappedConsole = wrapConsole(opts.onConsole);
 
@@ -2636,7 +2641,7 @@ function buildResolver(
     const resolved = resolveId(id, baseDir);
     if (CORE_MODULES[resolved]) return CORE_MODULES[resolved];
 
-    const rec = loadModule(resolved);
+    const rec = loadModule(resolved, resolver._ownerRecord);
     // Proxy for async WASM — reads from rec.exports at access time so
     // reassigned module.exports is picked up after compilation finishes
     if ((rec as any).__wasmReady) {
@@ -3045,7 +3050,14 @@ export class ScriptEngine {
     filename: string = "/index.js",
   ): { exports: unknown; module: ModuleRecord } {
     const dir = pathPolyfill.dirname(filename);
-    this.vol.writeFileSync(filename, code);
+    // Only write when the content differs to avoid triggering file watchers
+    // (e.g. nodemon/chokidar) with a no-op write that causes restart loops.
+    try {
+      const existing = this.vol.readFileSync(filename, "utf8");
+      if (existing !== code) this.vol.writeFileSync(filename, code);
+    } catch {
+      this.vol.writeFileSync(filename, code);
+    }
 
     const mod: ModuleRecord = {
       id: filename,
@@ -3054,6 +3066,7 @@ export class ScriptEngine {
       loaded: false,
       children: [],
       paths: [],
+      parent: null,
     };
     this.moduleRegistry[filename] = mod;
 
@@ -3116,6 +3129,7 @@ export class ScriptEngine {
       this.transformCache,
       fileHasTLA,
     );
+    resolver._ownerRecord = mod;
 
     try {
       const metaUrl = "file://" + filename;
@@ -3180,7 +3194,8 @@ export class ScriptEngine {
   ): Promise<{ exports: unknown; module: ModuleRecord }> {
     const source = this.vol.readFileSync(filename, "utf8");
     const dir = pathPolyfill.dirname(filename);
-    this.vol.writeFileSync(filename, source);
+    // No need to write — source was just read from the same volume.
+    // Writing it back triggers file watchers (nodemon restart loops).
 
     const mod: ModuleRecord = {
       id: filename,
@@ -3189,6 +3204,7 @@ export class ScriptEngine {
       loaded: false,
       children: [],
       paths: [],
+      parent: null,
     };
     this.moduleRegistry[filename] = mod;
 
@@ -3227,6 +3243,7 @@ export class ScriptEngine {
       this.transformCache,
       false,
     );
+    resolver._ownerRecord = mod;
 
     if (!tla) {
       try {

@@ -414,6 +414,7 @@ export function buildProcessEnv(config?: {
     npm_config_user_agent: DEFAULT_ENV.npm_config_user_agent,
     npm_execpath: DEFAULT_ENV.npm_execpath,
     npm_node_execpath: DEFAULT_ENV.npm_node_execpath,
+    NAPI_RS_FORCE_WASM: "1",
     NEXT_TELEMETRY_DISABLED: "1",
     DO_NOT_TRACK: "1",
     ...config?.env,

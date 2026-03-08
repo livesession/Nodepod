@@ -1,5 +1,4 @@
 import { MemoryVolume } from "../memory-volume";
-import { ScriptEngine } from "../script-engine";
 import { DependencyInstaller } from "../packages/installer";
 import { RequestProxy } from "../request-proxy";
 import type { NodepodOptions, TerminalOptions, Snapshot, SnapshotOptions, SpawnOptions } from "./types";
@@ -10,7 +9,6 @@ import { ProcessManager } from "../threading/process-manager";
 export declare class Nodepod {
     readonly fs: NodepodFS;
     private _volume;
-    private _engine;
     private _packages;
     private _proxy;
     private _cwd;
@@ -51,7 +49,8 @@ export declare class Nodepod {
         } | null;
     };
     get volume(): MemoryVolume;
-    get engine(): ScriptEngine;
+    /** @deprecated Main-thread engine removed for security. All code runs in isolated Web Workers via spawn(). */
+    get engine(): never;
     get packages(): DependencyInstaller;
     get proxy(): RequestProxy;
     get processManager(): ProcessManager;

@@ -8,7 +8,7 @@ var __accessCheck = (obj, member, msg) => member.has(obj) || __typeError("Cannot
 var __privateGet = (obj, member, getter) => (__accessCheck(obj, member, "read from private field"), getter ? getter.call(obj) : member.get(obj));
 var __privateAdd = (obj, member, value) => member.has(obj) ? __typeError("Cannot add the same private member more than once") : member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
 var __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "access private method"), method);
-let watcherPolyfill, ProcessWorkerAdapter, Buffer2, RequestProxy, DEFAULT_ENV, EventEmitter, SANDBOX_DEPLOYMENT_GUIDE, SharedVFSController, SharedVFSReader, IframeSandbox, SyncChannelController, SyncChannelWorker, LS_BLOCK_SIZE, MOCK_PID, NPM_REGISTRY_URL_SLASH, VFSBridge, ProcessHandle, WorkerSandbox, Readable, ScriptEngine, TIMEOUTS, WorkerVFS, VERSIONS, Writable, assert$1, YES_REPEAT_COUNT, buildFileSystemBridge, buildProcessEnv, relative, createProcessContext, createWorkspace, esbuildPolyfill, events, executeCode, macEventsPolyfill, generateSandboxDeployment, getProxyInstance, getSandboxHostingConfig, getSandboxPageHtml, httpPolyfill, install, isSharedArrayBufferAvailable, module$1, tcpPolyfill, installer, pathPolyfill, perfPolyfill, qsPolyfill, scannerPolyfill, resetProxy, rollupPolyfill, setActiveContext, spawnEngine, spawnProcessWorkerEngine, stream, urlPolyfill, helpersPolyfill, threadPoolPolyfill, wsPolyfill, registryClient, basename, createHash, dirname, extname, format, getAllServers, ref$1, addDrainListener, closeAllServers, resetRefCount, getActiveContext, getRefCount, normalize, resetActiveInterfaceCount, DependencyInstaller, LRUCache, resolve$2, MemoryHandler, MemoryVolume, unref, Nodepod, NodepodFS, NodepodProcess, NodepodTerminal, ProcessManager;
+let watcherPolyfill, ProcessWorkerAdapter, Buffer2, RequestProxy, DEFAULT_ENV, EventEmitter, SANDBOX_DEPLOYMENT_GUIDE, SharedVFSController, SharedVFSReader, IframeSandbox, SyncChannelController, SyncChannelWorker, LS_BLOCK_SIZE, MOCK_PID, NPM_REGISTRY_URL_SLASH, VFSBridge, ProcessHandle, WorkerSandbox, Readable, ScriptEngine, TIMEOUTS, WorkerVFS, VERSIONS, Writable, assert$1, YES_REPEAT_COUNT, buildFileSystemBridge, buildProcessEnv, relative, createProcessContext, createWorkspace, esbuildPolyfill, events, executeCode, macEventsPolyfill, generateSandboxDeployment, getProxyInstance, getSandboxHostingConfig, getSandboxPageHtml, httpPolyfill, install, isSharedArrayBufferAvailable, module$1, tcpPolyfill, installer, pathPolyfill, perfPolyfill, qsPolyfill, scannerPolyfill, resetProxy, rollupPolyfill, setActiveContext, spawnEngine, spawnProcessWorkerEngine, stream, urlPolyfill, helpersPolyfill, threadPoolPolyfill, wsPolyfill, registryClient, basename, createHash, dirname, extname, format, getAllServers, ref$1, addDrainListener, closeAllServers, resetRefCount, resetActiveInterfaceCount, getActiveContext, normalize, getRefCount, DependencyInstaller, LRUCache, resolve$2, MemoryHandler, MemoryVolume, unref, Nodepod, NodepodFS, NodepodProcess, NodepodTerminal, ProcessManager;
 let __tla = (async () => {
   var _a, _b, _c;
   const SEGMENT_SIZE = 8192;
@@ -30263,7 +30263,7 @@ ${scanErr.stack}` : "";
       });
       this.fsBridge = buildFileSystemBridge(vol, () => this.proc.cwd());
       this.opts = opts;
-      import("./child_process-4ZrgCVFu.js").then(async (m) => {
+      import("./child_process-CgnmoilU.js").then(async (m) => {
         await m.__tla;
         return m;
       }).then((mod) => {
@@ -36117,19 +36117,10 @@ miniExpose(endpoint);
       }
     };
   }
-  let _shellMod$1 = null;
-  async function getShellMod$1() {
-    if (!_shellMod$1) _shellMod$1 = await import("./child_process-4ZrgCVFu.js").then(async (m) => {
-      await m.__tla;
-      return m;
-    });
-    return _shellMod$1;
-  }
   Nodepod = (_c = class {
-    constructor(volume, engine2, packages, proxy2, cwd, handler) {
+    constructor(volume, packages, proxy2, cwd, handler) {
       __publicField(this, "fs");
       __publicField(this, "_volume");
-      __publicField(this, "_engine");
       __publicField(this, "_packages");
       __publicField(this, "_proxy");
       __publicField(this, "_cwd");
@@ -36140,7 +36131,6 @@ miniExpose(endpoint);
       __publicField(this, "_unwatchVFS", null);
       __publicField(this, "_handler");
       this._volume = volume;
-      this._engine = engine2;
       this._packages = packages;
       this._proxy = proxy2;
       this._cwd = cwd;
@@ -36205,11 +36195,6 @@ miniExpose(endpoint);
       const handler = new MemoryHandler(opts.memory);
       handler.startMonitoring();
       const volume = new MemoryVolume(handler);
-      const engine2 = new ScriptEngine(volume, {
-        cwd,
-        env: opts.env,
-        handler
-      });
       let snapshotCache = null;
       if (opts.enableSnapshotCache !== false) {
         try {
@@ -36223,8 +36208,7 @@ miniExpose(endpoint);
       const proxy2 = getProxyInstance({
         onServerReady: opts.onServerReady
       });
-      const nodepod = new Nodepod(volume, engine2, packages, proxy2, cwd, handler);
-      handler.onPressure(() => engine2.clearCache());
+      const nodepod = new Nodepod(volume, packages, proxy2, cwd, handler);
       if (opts.files) {
         for (const [path2, content] of Object.entries(opts.files)) {
           const dir = path2.substring(0, path2.lastIndexOf("/")) || "/";
@@ -36251,11 +36235,6 @@ miniExpose(endpoint);
           });
         }
       }
-      const shell = await getShellMod$1();
-      shell.initShellExec(volume, {
-        cwd,
-        env: opts.env
-      });
       if (opts.swUrl && typeof navigator !== "undefined" && "serviceWorker" in navigator) {
         try {
           await proxy2.initServiceWorker({
@@ -36525,18 +36504,15 @@ miniExpose(endpoint);
         this._unwatchVFS();
         this._unwatchVFS = null;
       }
-      this._engine.clearCache();
       this._processManager.teardown();
       this._volume.dispose();
       this._handler.destroy();
     }
     memoryStats() {
       const vfs = this._volume.getStats();
-      const moduleRegistry = this._engine.moduleRegistry ?? {};
-      const transformCache = this._engine.transformCache;
       const engine2 = {
-        moduleCacheSize: Object.keys(moduleRegistry).length,
-        transformCacheSize: (transformCache == null ? void 0 : transformCache.size) ?? 0
+        moduleCacheSize: 0,
+        transformCacheSize: 0
       };
       let heap = null;
       const perf = typeof performance !== "undefined" ? performance : null;
@@ -36557,7 +36533,7 @@ miniExpose(endpoint);
       return this._volume;
     }
     get engine() {
-      return this._engine;
+      throw new Error("[Nodepod] Main-thread engine removed for security. All code now runs in isolated Web Workers via spawn().");
     }
     get packages() {
       return this._packages;
@@ -36767,7 +36743,7 @@ miniExpose(endpoint);
   };
   let _shellMod = null;
   async function getShellMod() {
-    if (!_shellMod) _shellMod = await import("./child_process-4ZrgCVFu.js").then(async (m) => {
+    if (!_shellMod) _shellMod = await import("./child_process-CgnmoilU.js").then(async (m) => {
       await m.__tla;
       return m;
     });
@@ -36905,10 +36881,10 @@ export {
   addDrainListener as i,
   closeAllServers as j,
   resetRefCount as k,
-  getActiveContext as l,
-  getRefCount as m,
+  resetActiveInterfaceCount as l,
+  getActiveContext as m,
   normalize as n,
-  resetActiveInterfaceCount as o,
+  getRefCount as o,
   DependencyInstaller as p,
   LRUCache as q,
   resolve$2 as r,

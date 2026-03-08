@@ -32258,7 +32258,7 @@ class ScriptEngine {
     });
     this.fsBridge = buildFileSystemBridge(vol, () => this.proc.cwd());
     this.opts = opts;
-    Promise.resolve().then(() => require('./child_process-Cao4lyrb.cjs')).then((mod) => {
+    Promise.resolve().then(() => require('./child_process-bGGe8mTj.cjs')).then((mod) => {
       _shellExecPolyfill = mod;
       mod.initShellExec;
     }).catch(() => {
@@ -33233,7 +33233,7 @@ function generateUUID() {
 }
 
 function createWorker() {
-  const base = (typeof document === 'undefined' ? require('u' + 'rl').pathToFileURL(__filename).href : (_documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === 'SCRIPT' && _documentCurrentScript.src || new URL('index-DuYo2yDs.cjs', document.baseURI).href));
+  const base = (typeof document === 'undefined' ? require('u' + 'rl').pathToFileURL(__filename).href : (_documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === 'SCRIPT' && _documentCurrentScript.src || new URL('index-NinyWmnj.cjs', document.baseURI).href));
   const path = "./threading/engine-worker.ts";
   const url = new globalThis.URL(path, base);
   return new globalThis.Worker(url, { type: "module" });
@@ -35096,7 +35096,7 @@ function readServiceWorkerSource() {
     let dir;
     try {
       const url = _req("url");
-      dir = path.dirname(url.fileURLToPath((typeof document === 'undefined' ? require('u' + 'rl').pathToFileURL(__filename).href : (_documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === 'SCRIPT' && _documentCurrentScript.src || new URL('index-DuYo2yDs.cjs', document.baseURI).href))));
+      dir = path.dirname(url.fileURLToPath((typeof document === 'undefined' ? require('u' + 'rl').pathToFileURL(__filename).href : (_documentCurrentScript && _documentCurrentScript.tagName.toUpperCase() === 'SCRIPT' && _documentCurrentScript.src || new URL('index-NinyWmnj.cjs', document.baseURI).href))));
     } catch {
       dir = typeof __dirname !== "undefined" ? __dirname : ".";
     }
@@ -38060,15 +38060,9 @@ async function openSnapshotCache() {
   };
 }
 
-let _shellMod$1 = null;
-async function getShellMod$1() {
-  if (!_shellMod$1) _shellMod$1 = await Promise.resolve().then(() => require('./child_process-Cao4lyrb.cjs'));
-  return _shellMod$1;
-}
 class Nodepod {
   fs;
   _volume;
-  _engine;
   _packages;
   _proxy;
   _cwd;
@@ -38079,9 +38073,8 @@ class Nodepod {
   _unwatchVFS = null;
   _handler;
   /* ---- Construction (use Nodepod.boot()) ---- */
-  constructor(volume, engine, packages, proxy, cwd, handler) {
+  constructor(volume, packages, proxy, cwd, handler) {
     this._volume = volume;
-    this._engine = engine;
     this._packages = packages;
     this._proxy = proxy;
     this._cwd = cwd;
@@ -38149,11 +38142,6 @@ class Nodepod {
     const handler = new MemoryHandler(opts.memory);
     handler.startMonitoring();
     const volume = new MemoryVolume(handler);
-    const engine = new ScriptEngine(volume, {
-      cwd,
-      env: opts.env,
-      handler
-    });
     let snapshotCache = null;
     if (opts.enableSnapshotCache !== false) {
       try {
@@ -38165,8 +38153,7 @@ class Nodepod {
     const proxy = getProxyInstance({
       onServerReady: opts.onServerReady
     });
-    const nodepod = new Nodepod(volume, engine, packages, proxy, cwd, handler);
-    handler.onPressure(() => engine.clearCache());
+    const nodepod = new Nodepod(volume, packages, proxy, cwd, handler);
     if (opts.files) {
       for (const [path, content] of Object.entries(opts.files)) {
         const dir = path.substring(0, path.lastIndexOf("/")) || "/";
@@ -38184,8 +38171,6 @@ class Nodepod {
         volume.mkdirSync(dir, { recursive: true });
       }
     }
-    const shell = await getShellMod$1();
-    shell.initShellExec(volume, { cwd, env: opts.env });
     if (opts.swUrl && typeof navigator !== "undefined" && "serviceWorker" in navigator) {
       try {
         await proxy.initServiceWorker({ swUrl: opts.swUrl });
@@ -38462,7 +38447,6 @@ class Nodepod {
       this._unwatchVFS();
       this._unwatchVFS = null;
     }
-    this._engine.clearCache();
     this._processManager.teardown();
     this._volume.dispose();
     this._handler.destroy();
@@ -38470,12 +38454,7 @@ class Nodepod {
   /* ---- Performance stats ---- */
   memoryStats() {
     const vfs = this._volume.getStats();
-    const moduleRegistry = this._engine.moduleRegistry ?? {};
-    const transformCache = this._engine.transformCache;
-    const engine = {
-      moduleCacheSize: Object.keys(moduleRegistry).length,
-      transformCacheSize: transformCache?.size ?? 0
-    };
+    const engine = { moduleCacheSize: 0, transformCacheSize: 0 };
     let heap = null;
     const perf = typeof performance !== "undefined" ? performance : null;
     if (perf?.memory) {
@@ -38491,8 +38470,11 @@ class Nodepod {
   get volume() {
     return this._volume;
   }
+  /** @deprecated Main-thread engine removed for security. All code runs in isolated Web Workers via spawn(). */
   get engine() {
-    return this._engine;
+    throw new Error(
+      "[Nodepod] Main-thread engine removed for security. All code now runs in isolated Web Workers via spawn()."
+    );
   }
   get packages() {
     return this._packages;
@@ -38700,7 +38682,7 @@ class WorkerVFS {
 
 let _shellMod = null;
 async function getShellMod() {
-  if (!_shellMod) _shellMod = await Promise.resolve().then(() => require('./child_process-Cao4lyrb.cjs'));
+  if (!_shellMod) _shellMod = await Promise.resolve().then(() => require('./child_process-bGGe8mTj.cjs'));
   return _shellMod;
 }
 function createWorkspace(config) {
@@ -38839,4 +38821,4 @@ exports.unref = unref;
 exports.urlPolyfill = urlPolyfill;
 exports.watcherPolyfill = watcherPolyfill;
 exports.wsPolyfill = wsPolyfill;
-//# sourceMappingURL=index-DuYo2yDs.cjs.map
+//# sourceMappingURL=index-NinyWmnj.cjs.map

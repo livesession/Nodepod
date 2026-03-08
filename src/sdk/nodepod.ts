@@ -1,7 +1,10 @@
 import { MemoryVolume } from "../memory-volume";
-import { ScriptEngine } from "../script-engine";
 import { DependencyInstaller } from "../packages/installer";
-import { RequestProxy, getProxyInstance, type IVirtualServer } from "../request-proxy";
+import {
+  RequestProxy,
+  getProxyInstance,
+  type IVirtualServer,
+} from "../request-proxy";
 import type { VolumeSnapshot } from "../engine-types";
 import { Buffer } from "../polyfills/buffer";
 import type {
@@ -17,23 +20,18 @@ import { NodepodTerminal } from "./nodepod-terminal";
 import { ProcessManager } from "../threading/process-manager";
 import type { ProcessHandle } from "../threading/process-handle";
 import { VFSBridge } from "../threading/vfs-bridge";
-import { isSharedArrayBufferAvailable, SharedVFSController } from "../threading/shared-vfs";
+import {
+  isSharedArrayBufferAvailable,
+  SharedVFSController,
+} from "../threading/shared-vfs";
 import { SyncChannelController } from "../threading/sync-channel";
 import { MemoryHandler } from "../memory-handler";
 import { openSnapshotCache } from "../persistence/idb-cache";
-
-// Lazy-load child_process so the shell doesn't get pulled in at import time
-let _shellMod: typeof import("../polyfills/child_process") | null = null;
-async function getShellMod() {
-  if (!_shellMod) _shellMod = await import("../polyfills/child_process");
-  return _shellMod;
-}
 
 export class Nodepod {
   readonly fs: NodepodFS;
 
   private _volume: MemoryVolume;
-  private _engine: ScriptEngine;
   private _packages: DependencyInstaller;
   private _proxy: RequestProxy;
   private _cwd: string;
@@ -49,14 +47,12 @@ export class Nodepod {
 
   private constructor(
     volume: MemoryVolume,
-    engine: ScriptEngine,
     packages: DependencyInstaller,
     proxy: RequestProxy,
     cwd: string,
     handler: MemoryHandler,
   ) {
     this._volume = volume;
-    this._engine = engine;
     this._packages = packages;
     this._proxy = proxy;
     this._cwd = cwd;
@@ -67,7 +63,12 @@ export class Nodepod {
 
     this._vfsBridge.setBroadcaster((path, content, excludePid) => {
       const isDirectory = content !== null && content.byteLength === 0;
-      this._processManager.broadcastVFSChange(path, content, isDirectory, excludePid);
+      this._processManager.broadcastVFSChange(
+        path,
+        content,
+        isDirectory,
+        excludePid,
+      );
     });
 
     this._processManager.setVFSBridge(this._vfsBridge);
@@ -93,29 +94,41 @@ export class Nodepod {
     }
 
     // Bridge worker HTTP servers to the RequestProxy for preview URLs
-    this._processManager.on("server-listen", (_pid: number, port: number, _hostname: string) => {
-      const proxyServer: IVirtualServer = {
-        listening: true,
-        address: () => ({ port, address: "0.0.0.0", family: "IPv4" }),
-        dispatchRequest: async (method, url, headers, body) => {
-          const bodyStr = body ? (typeof body === "string" ? body : body.toString("utf8")) : null;
-          const result = await this._processManager.dispatchHttpRequest(
-            port, method, url, headers, bodyStr,
-          );
-          // Body can be ArrayBuffer (binary) or string (text)
-          const respBody = result.body instanceof ArrayBuffer
-            ? Buffer.from(new Uint8Array(result.body))
-            : Buffer.from(result.body);
-          return {
-            statusCode: result.statusCode,
-            statusMessage: result.statusMessage,
-            headers: result.headers,
-            body: respBody,
-          };
-        },
-      };
-      this._proxy.register(proxyServer, port);
-    });
+    this._processManager.on(
+      "server-listen",
+      (_pid: number, port: number, _hostname: string) => {
+        const proxyServer: IVirtualServer = {
+          listening: true,
+          address: () => ({ port, address: "0.0.0.0", family: "IPv4" }),
+          dispatchRequest: async (method, url, headers, body) => {
+            const bodyStr = body
+              ? typeof body === "string"
+                ? body
+                : body.toString("utf8")
+              : null;
+            const result = await this._processManager.dispatchHttpRequest(
+              port,
+              method,
+              url,
+              headers,
+              bodyStr,
+            );
+            // Body can be ArrayBuffer (binary) or string (text)
+            const respBody =
+              result.body instanceof ArrayBuffer
+                ? Buffer.from(new Uint8Array(result.body))
+                : Buffer.from(result.body);
+            return {
+              statusCode: result.statusCode,
+              statusMessage: result.statusMessage,
+              headers: result.headers,
+              body: respBody,
+            };
+          },
+        };
+        this._proxy.register(proxyServer, port);
+      },
+    );
 
     this._processManager.on("server-close", (_pid: number, port: number) => {
       this._proxy.unregister(port);
@@ -128,26 +141,29 @@ export class Nodepod {
 
   static async boot(opts: NodepodOptions = {}): Promise<Nodepod> {
     if (typeof Worker === "undefined") {
-      throw new Error("[Nodepod] Web Workers are required. Nodepod cannot run without Web Worker support.");
+      throw new Error(
+        "[Nodepod] Web Workers are required. Nodepod cannot run without Web Worker support.",
+      );
     }
     if (typeof SharedArrayBuffer === "undefined") {
-      throw new Error("[Nodepod] SharedArrayBuffer is required. Ensure Cross-Origin-Isolation headers are set (Cross-Origin-Opener-Policy: same-origin, Cross-Origin-Embedder-Policy: credentialless).");
+      throw new Error(
+        "[Nodepod] SharedArrayBuffer is required. Ensure Cross-Origin-Isolation headers are set (Cross-Origin-Opener-Policy: same-origin, Cross-Origin-Embedder-Policy: credentialless).",
+      );
     }
 
     const cwd = opts.workdir ?? "/";
     const handler = new MemoryHandler(opts.memory);
     handler.startMonitoring();
     const volume = new MemoryVolume(handler);
-    const engine = new ScriptEngine(volume, {
-      cwd,
-      env: opts.env,
-      handler,
-    });
 
     // Open IDB snapshot cache for faster re-boots (opt-out via enableSnapshotCache: false)
     let snapshotCache = null;
     if (opts.enableSnapshotCache !== false) {
-      try { snapshotCache = await openSnapshotCache(); } catch { /* IDB unavailable */ }
+      try {
+        snapshotCache = await openSnapshotCache();
+      } catch {
+        /* IDB unavailable */
+      }
     }
 
     const packages = new DependencyInstaller(volume, { snapshotCache });
@@ -155,10 +171,7 @@ export class Nodepod {
       onServerReady: opts.onServerReady,
     });
 
-    const nodepod = new Nodepod(volume, engine, packages, proxy, cwd, handler);
-
-    // Drop module cache under memory pressure (safe — modules re-execute on next require)
-    handler.onPressure(() => engine.clearCache());
+    const nodepod = new Nodepod(volume, packages, proxy, cwd, handler);
 
     if (opts.files) {
       for (const [path, content] of Object.entries(opts.files)) {
@@ -179,9 +192,6 @@ export class Nodepod {
         volume.mkdirSync(dir, { recursive: true });
       }
     }
-
-    const shell = await getShellMod();
-    shell.initShellExec(volume, { cwd, env: opts.env });
 
     if (
       opts.swUrl &&
@@ -243,9 +253,13 @@ export class Nodepod {
     proc._setKillFn(() => handle.kill("SIGINT"));
 
     if (opts?.signal) {
-      opts.signal.addEventListener("abort", () => {
-        handle.kill("SIGINT");
-      }, { once: true });
+      opts.signal.addEventListener(
+        "abort",
+        () => {
+          handle.kill("SIGINT");
+        },
+        { once: true },
+      );
     }
 
     await new Promise<void>((resolve) => {
@@ -301,7 +315,10 @@ export class Nodepod {
     let activeAbort: AbortController | null = null;
     let currentSendStdin: ((data: string) => void) | null = null;
     let activeCommandId = 0;
-    const nextCommandId = () => { activeCommandId = (activeCommandId + 1) % Number.MAX_SAFE_INTEGER; return activeCommandId; };
+    const nextCommandId = () => {
+      activeCommandId = (activeCommandId + 1) % Number.MAX_SAFE_INTEGER;
+      return activeCommandId;
+    };
     let isStdinRaw = false;
 
     // Persistent shell worker -- reused across commands so VFS state persists
@@ -388,9 +405,13 @@ export class Nodepod {
         currentSendStdin = (data: string) => handle.sendStdin(data);
 
         // PM.kill() recursively kills descendants + cleans up server ports
-        myAbort.signal.addEventListener("abort", () => {
-          this._processManager.kill(handle.pid, "SIGINT");
-        }, { once: true });
+        myAbort.signal.addEventListener(
+          "abort",
+          () => {
+            this._processManager.kill(handle.pid, "SIGINT");
+          },
+          { once: true },
+        );
 
         handle.exec({
           type: "exec",
@@ -501,11 +522,18 @@ export class Nodepod {
   /* ---- snapshot / restore ---- */
 
   /** Directory names excluded from snapshots at any depth when shallow=true. */
-  private static readonly SHALLOW_EXCLUDE_DIRS = new Set(['node_modules', '.cache', '.npm']);
+  private static readonly SHALLOW_EXCLUDE_DIRS = new Set([
+    "node_modules",
+    ".cache",
+    ".npm",
+  ]);
 
   snapshot(opts?: SnapshotOptions): Snapshot {
     const shallow = opts?.shallow ?? true;
-    return this._volume.toSnapshot(undefined, shallow ? Nodepod.SHALLOW_EXCLUDE_DIRS : undefined);
+    return this._volume.toSnapshot(
+      undefined,
+      shallow ? Nodepod.SHALLOW_EXCLUDE_DIRS : undefined,
+    );
   }
 
   async restore(snapshot: Snapshot, opts?: SnapshotOptions): Promise<void> {
@@ -516,7 +544,7 @@ export class Nodepod {
     (this._volume as any).tree = (fresh as any).tree;
 
     // Auto-install deps from package.json if requested and manifest exists
-    if (autoInstall && this._volume.existsSync('/package.json')) {
+    if (autoInstall && this._volume.existsSync("/package.json")) {
       await this._packages.installFromManifest();
     }
   }
@@ -528,7 +556,6 @@ export class Nodepod {
       this._unwatchVFS();
       this._unwatchVFS = null;
     }
-    this._engine.clearCache();
     this._processManager.teardown();
     this._volume.dispose();
     this._handler.destroy();
@@ -537,24 +564,27 @@ export class Nodepod {
   /* ---- Performance stats ---- */
 
   memoryStats(): {
-    vfs: { fileCount: number; totalBytes: number; dirCount: number; watcherCount: number };
+    vfs: {
+      fileCount: number;
+      totalBytes: number;
+      dirCount: number;
+      watcherCount: number;
+    };
     engine: { moduleCacheSize: number; transformCacheSize: number };
     heap: { usedMB: number; totalMB: number; limitMB: number } | null;
   } {
     const vfs = this._volume.getStats();
-    const moduleRegistry = (this._engine as any).moduleRegistry ?? {};
-    const transformCache: Map<string, string> = (this._engine as any).transformCache;
-    const engine = {
-      moduleCacheSize: Object.keys(moduleRegistry).length,
-      transformCacheSize: transformCache?.size ?? 0,
-    };
-    let heap: { usedMB: number; totalMB: number; limitMB: number } | null = null;
-    const perf = typeof performance !== 'undefined' ? (performance as any) : null;
+    // Engine stats are per-worker; main thread no longer runs a ScriptEngine
+    const engine = { moduleCacheSize: 0, transformCacheSize: 0 };
+    let heap: { usedMB: number; totalMB: number; limitMB: number } | null =
+      null;
+    const perf =
+      typeof performance !== "undefined" ? (performance as any) : null;
     if (perf?.memory) {
       heap = {
-        usedMB: Math.round(perf.memory.usedJSHeapSize / 1048576 * 10) / 10,
-        totalMB: Math.round(perf.memory.totalJSHeapSize / 1048576 * 10) / 10,
-        limitMB: Math.round(perf.memory.jsHeapSizeLimit / 1048576 * 10) / 10,
+        usedMB: Math.round((perf.memory.usedJSHeapSize / 1048576) * 10) / 10,
+        totalMB: Math.round((perf.memory.totalJSHeapSize / 1048576) * 10) / 10,
+        limitMB: Math.round((perf.memory.jsHeapSizeLimit / 1048576) * 10) / 10,
       };
     }
     return { vfs, engine, heap };
@@ -562,10 +592,26 @@ export class Nodepod {
 
   /* ---- Escape hatches ---- */
 
-  get volume(): MemoryVolume { return this._volume; }
-  get engine(): ScriptEngine { return this._engine; }
-  get packages(): DependencyInstaller { return this._packages; }
-  get proxy(): RequestProxy { return this._proxy; }
-  get processManager(): ProcessManager { return this._processManager; }
-  get cwd(): string { return this._cwd; }
+  get volume(): MemoryVolume {
+    return this._volume;
+  }
+  /** @deprecated Main-thread engine removed for security. all code now runs in isolated Web Workers via spawn() <-- this removes fatal security flaws. */
+  get engine(): never {
+    throw new Error(
+      "[Nodepod] Main-thread engine removed for security. " +
+        "All code now runs in isolated Web Workers via spawn().",
+    );
+  }
+  get packages(): DependencyInstaller {
+    return this._packages;
+  }
+  get proxy(): RequestProxy {
+    return this._proxy;
+  }
+  get processManager(): ProcessManager {
+    return this._processManager;
+  }
+  get cwd(): string {
+    return this._cwd;
+  }
 }

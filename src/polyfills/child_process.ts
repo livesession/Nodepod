@@ -658,6 +658,14 @@ async function installPackages(
       spinner.update(colored);
     };
 
+    const isDev = args.some(
+      (a: string) =>
+        a === "-D" || a === "--save-dev" || a === "--dev",
+    );
+    const noSave = args.some(
+      (a: string) => a === "--no-save",
+    );
+
     let totalAdded = 0;
     if (names.length === 0) {
       const ir = await installer.installFromManifest(undefined, {
@@ -667,7 +675,11 @@ async function installPackages(
       totalAdded = ir.newPackages.length;
     } else {
       for (const n of names) {
-        const ir = await installer.install(n, undefined, { onProgress });
+        const ir = await installer.install(n, undefined, {
+          persist: !noSave,
+          persistDev: isDev && !noSave,
+          onProgress,
+        });
         totalAdded += ir.newPackages.length;
       }
     }

@@ -14,6 +14,18 @@ const acornJsxParser = (acorn.Parser as any).extend(acornJsx());
 let cachedRollup: unknown = null;
 let loadingPromise: Promise<unknown> | null = null;
 
+// injected by the script engine so bundle.write() can write to the VFS
+let _vfsMkdirSync: ((path: string, opts?: { recursive?: boolean }) => void) | null = null;
+let _vfsWriteFileSync: ((path: string, data: string | Uint8Array) => void) | null = null;
+
+export function setVFSBridge(
+  mkdirSync: (path: string, opts?: { recursive?: boolean }) => void,
+  writeFileSync: (path: string, data: string | Uint8Array) => void,
+): void {
+  _vfsMkdirSync = mkdirSync;
+  _vfsWriteFileSync = writeFileSync;
+}
+
 async function ensureRollup(): Promise<unknown> {
   if (cachedRollup) return cachedRollup;
   if (loadingPromise) return loadingPromise;
@@ -36,12 +48,51 @@ async function ensureRollup(): Promise<unknown> {
 
 export const VERSION: string = PINNED_ROLLUP_BROWSER;
 
-// .write() is a no-op in browser
+// @rollup/browser blocks fs access in bundle.write() so we intercept it,
+// call generate() instead, and write the output to the VFS ourselves
 export async function rollup(inputOptions: unknown): Promise<unknown> {
   const r = (await ensureRollup()) as {
     rollup: (o: unknown) => Promise<unknown>;
   };
-  return r.rollup(inputOptions);
+  const bundle = (await r.rollup(inputOptions)) as any;
+
+  bundle.write = async function (outputOptions: any) {
+    const result = await bundle.generate(outputOptions);
+
+    const dir = outputOptions?.dir || "dist";
+    if (!_vfsMkdirSync || !_vfsWriteFileSync) {
+      throw new Error("rollup: VFS bridge not set up");
+    }
+    const mkdirSync = _vfsMkdirSync;
+    const writeFileSync = _vfsWriteFileSync;
+
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch { /* already exists */ }
+
+    for (const chunk of result.output) {
+      const filePath = dir + "/" + chunk.fileName;
+      const fileDir = filePath.substring(0, filePath.lastIndexOf("/"));
+      if (fileDir && fileDir !== dir) {
+        try {
+          mkdirSync(fileDir, { recursive: true });
+        } catch { /* already exists */ }
+      }
+
+      if (chunk.type === "chunk") {
+        writeFileSync(filePath, chunk.code);
+        if (chunk.map) {
+          writeFileSync(filePath + ".map", chunk.map.toString());
+        }
+      } else if (chunk.type === "asset") {
+        writeFileSync(filePath, chunk.source);
+      }
+    }
+
+    return result;
+  };
+
+  return bundle;
 }
 
 export async function watch(watchOptions: unknown): Promise<unknown> {

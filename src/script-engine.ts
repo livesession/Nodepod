@@ -2957,6 +2957,10 @@ export class ScriptEngine {
     watcherPolyfill.setVolume(vol);
     scannerPolyfill.setVolume(vol);
     esbuildPolyfill.setVolume(vol);
+    rollupPolyfill.setVFSBridge(
+      (path, opts) => vol.mkdirSync(path, opts),
+      (path, data) => vol.writeFileSync(path, data),
+    );
 
     (globalThis as any).__nodepodVolume = vol;
 

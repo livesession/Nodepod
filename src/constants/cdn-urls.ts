@@ -1,7 +1,7 @@
 // Pinned CDN versions and URLs
 
 export const PINNED_ESBUILD_WASM = '0.20.0';
-export const PINNED_ROLLUP_BROWSER = '4.9.0';
+export const PINNED_ROLLUP_BROWSER = '4.44.0';
 export const PINNED_BROTLI_WASM = '3.0.1';
 export const PINNED_LIGHTNINGCSS_WASM = '1.31.1';
 

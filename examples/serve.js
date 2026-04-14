@@ -41,4 +41,5 @@ createServer((req, res) => {
   console.log(`  Basic:                http://localhost:${port}/examples/basic/`);
   console.log(`  Brotli test:          http://localhost:${port}/examples/brotli-test/`);
   console.log(`  Child process test:   http://localhost:${port}/examples/child-process-test/`);
+  console.log(`  Vite build test:      http://localhost:${port}/examples/vite-build-test/`);
 });

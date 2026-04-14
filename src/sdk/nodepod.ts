@@ -347,7 +347,7 @@ export class Nodepod {
       shellHandle = this._processManager.spawn({
         command: "shell",
         args: [],
-        cwd: this._cwd,
+        cwd: terminal.getCwd(),
         env: this._env,
       });
       shellReady = new Promise<void>((resolve) => {
@@ -431,7 +431,7 @@ export class Nodepod {
           type: "exec",
           filePath: "",
           args: [],
-          cwd: this._cwd,
+          cwd: terminal.getCwd(),
           isShell: true,
           shellCommand: cmd,
           persistent: true,

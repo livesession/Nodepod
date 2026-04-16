@@ -95,6 +95,7 @@ import * as sqlitePolyfill from "./polyfills/sqlite";
 import * as quicPolyfill from "./polyfills/quic";
 import * as lightningcssPolyfill from "./polyfills/lightningcss";
 import * as tailwindOxidePolyfill from "./polyfills/tailwindcss-oxide";
+import { createNapiWorkerFactory, isNapiWasiWorkerScript } from "./helpers/napi-wasm-worker";
 import {
   promises as streamPromises,
   Readable,
@@ -951,8 +952,8 @@ const CORE_MODULES: Record<string, unknown> = {
   sea: seaPolyfill,
   sqlite: sqlitePolyfill,
   quic: quicPolyfill,
-  lightningcss: lightningcssPolyfill,
-  "@tailwindcss/oxide": tailwindOxidePolyfill,
+  // All native packages (lightningcss, tailwindcss/oxide, rolldown, @node-rs/*)
+  // load generically via WASM fallback — no hardcoded polyfills.
   sys: helpersPolyfill,
   "util/types": helpersPolyfill.types,
   "path/posix": pathPolyfill,
@@ -1208,7 +1209,25 @@ function buildResolver(
       return id;
     }
 
-    if (id.startsWith("@rolldown/binding-")) {
+    if (id.startsWith("@rolldown/binding-") && !id.includes("wasm32-wasi")) {
+      // Only intercept platform-specific native binding requests (e.g. @rolldown/binding-linux-x64-gnu).
+      // The wasm32-wasi variant loads generically via the napi-rs WASM path.
+      // First, try to resolve the wasm32-wasi package — if it's installed, let
+      // normal resolution handle it (the WASM fallback code below will find it).
+      try {
+        const wasiAlt = "@rolldown/binding-wasm32-wasi";
+        const wasiResolved = resolveId(wasiAlt, fromDir);
+        if (wasiResolved) {
+          // wasm32-wasi package is installed — throw MODULE_NOT_FOUND to trigger
+          // the generic WASM fallback resolution path below
+          const e = new Error(`Cannot load native addon '${id}' — use WASM fallback`) as Error & { code: string };
+          e.code = "MODULE_NOT_FOUND";
+          throw e;
+        }
+      } catch (wasiErr: any) {
+        if (wasiErr?.code === "MODULE_NOT_FOUND") throw wasiErr;
+        // wasm32-wasi not installed — fall through to the JS stub below
+      }
       if (!CORE_MODULES[id]) {
         const makeParseResult = (source: string, opts?: any) => {
           const lang = opts?.lang || "js";
@@ -2284,7 +2303,19 @@ function buildResolver(
           const condExtra =
             extraConditions.length > 0 ? { conditions: extraConditions } : {};
 
-          const baseSets: Record<string, unknown>[] = preferEsm
+          // For WASM packages (wasm32-wasi or -wasm), always prefer Node.js conditions.
+          // The browser entry uses native Worker(url) or requires async init().
+          // The Node.js entry uses worker_threads.Worker (polyfilled) or sync init.
+          const isWasmPkg = pkgName.includes("wasm32-wasi") || pkgName.endsWith("-wasm") || (Array.isArray((manifest as any).cpu) && (manifest as any).cpu.includes("wasm32"));
+          const baseSets: Record<string, unknown>[] = isWasmPkg
+            ? [
+                // Force Node.js path for WASM packages
+                { node: true, require: true, ...condExtra },
+                { require: true, ...condExtra },
+                { node: true, import: true, ...condExtra },
+                { import: true, ...condExtra },
+              ]
+            : preferEsm
             ? [
                 { node: true, import: true, ...condExtra },
                 { browser: true, import: true, ...condExtra },
@@ -2329,10 +2360,21 @@ function buildResolver(
 
         if (!exportsResolved && pkgName === moduleId) {
           let entry: string | undefined;
-          if (typeof manifest.browser === "string") entry = manifest.browser;
+          // For WASM packages, prefer the Node.js "main" entry over "browser".
+          // The browser entry uses native Worker(url) or requires async init().
+          // The Node.js entry uses worker_threads.Worker (polyfilled) or sync init.
+          const isWasmPkg = pkgName.includes("wasm32-wasi") || pkgName.endsWith("-wasm") || (Array.isArray((manifest as any).cpu) && (manifest as any).cpu.includes("wasm32"));
+          if (!isWasmPkg && typeof manifest.browser === "string") entry = manifest.browser;
           if (!entry && manifest.module) entry = manifest.module as string;
           if (!entry) entry = manifest.main || "index.js";
-          const found = tryFile(pathPolyfill.join(pkgRoot, entry));
+          let found = tryFile(pathPolyfill.join(pkgRoot, entry));
+          // Apply browser field object remapping (e.g. lightningcss maps
+          // "./node/index.js" → "./browser.js" for the WASM build)
+          if (found && !isWasmPkg) {
+            const remapped = applyBrowserRemap(found, manifest, pkgRoot);
+            if (remapped === null) found = null; // browser: { "./file": false } means "ignore"
+            else if (remapped !== found) found = remapped;
+          }
           if (found) return found;
         }
       }
@@ -2454,6 +2496,14 @@ function buildResolver(
       ) as Error & { code: string };
       e.code = "ERR_DLOPEN_FAILED";
       throw e;
+    }
+
+    // .wasm files — return raw binary bytes (used by napi-rs loaders via
+    // fs.readFileSync to get the WASM binary for WebAssembly.instantiate)
+    if (resolved.endsWith(".wasm")) {
+      record.exports = vol.readFileSync(resolved);
+      record.loaded = true;
+      return record;
     }
 
     const rawSource = vol.readFileSync(resolved, "utf8");
@@ -2784,6 +2834,21 @@ function buildResolver(
       (PerEngineModule as any).default = PerEngineModule;
       return PerEngineModule;
     }
+    // Per-engine core module overrides: inject VFS-backed fs into WASI,
+    // so that any napi-rs WASM package's .wasi.cjs loader gets filesystem access.
+    if (id === "wasi") {
+      const origWASI = wasiPolyfill.WASI;
+      return {
+        ...wasiPolyfill,
+        WASI: function WASIWithFs(this: any, options?: any) {
+          // Auto-inject the engine's fsBridge as the `fs` option if not already provided
+          const opts = { ...options };
+          if (!opts.fs) opts.fs = fsBridge;
+          return new (origWASI as any)(opts);
+        },
+      };
+    }
+
     if (CORE_MODULES[id]) return CORE_MODULES[id];
 
     let resolved: string;
@@ -2851,10 +2916,11 @@ function buildResolver(
           try {
             resolveCache.delete(`${baseDir}|${alt}`);
             const altResolved = resolveId(alt, baseDir);
+            console.log(`[WASM-fallback] ${id} → ${alt} resolved to ${altResolved}`);
             const altRec = loadModule(altResolved, resolver._ownerRecord);
             return altRec.exports;
-          } catch {
-            // not available
+          } catch (altErr: any) {
+            console.log(`[WASM-fallback] ${id} → ${alt} failed: ${altErr?.message?.slice(0, 120)}`);
           }
         }
       }
@@ -2963,6 +3029,28 @@ export class ScriptEngine {
     );
 
     (globalThis as any).__nodepodVolume = vol;
+
+    // Set up generic napi-rs WASI worker support.
+    // This installs a Worker constructor override that detects napi-rs WASI worker
+    // scripts (wasi-worker.mjs) and spawns them as real Web Workers with bundled
+    // dependencies, while falling back to the standard fork-based worker for
+    // all other scripts. This is GENERIC — works for ANY napi-rs WASM package.
+    {
+      const resolverForWorker = (id: string, fromDir: string): string => {
+        const r = buildResolver(vol, this.fsBridge, this.proc, fromDir, this.moduleRegistry, this.opts, this.transformCache);
+        return r.resolve(id);
+      };
+      const workerFactory = createNapiWorkerFactory(
+        vol,
+        resolverForWorker,
+        this.proc.env as Record<string, string>,
+        this.fsBridge,
+        (threadPoolPolyfill as any)._workerThreadForkFn ?? null,
+      );
+      threadPoolPolyfill.setWorkerConstructorOverride((self, script, opts) => {
+        workerFactory.call(self, script, opts);
+      });
+    }
 
     // Intercept fetch() for file:// URLs — serve from VFS instead of network.
     // napi-rs wasm32-wasi packages use fetch(new URL('file.wasm', import.meta.url))

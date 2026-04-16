@@ -1,4 +1,5 @@
 // worker_threads polyfill using fork infrastructure for real Web Workers
+// Enhanced with generic napi-rs WASI worker support
 
 
 import { EventEmitter } from "./events";
@@ -36,6 +37,17 @@ let _workerThreadForkFn: WorkerThreadForkFn | null = null;
 
 export function setWorkerThreadForkCallback(fn: WorkerThreadForkFn): void {
   _workerThreadForkFn = fn;
+}
+
+/**
+ * Override the Worker constructor with a custom factory.
+ * Used by the script-engine to inject PatchedWorker that supports napi-rs WASI workers.
+ * The factory receives the same (script, opts) args as the Worker constructor.
+ */
+let _workerConstructorOverride: ((self: any, script: string | URL, opts?: any) => void) | null = null;
+
+export function setWorkerConstructorOverride(fn: ((self: any, script: string | URL, opts?: any) => void) | null): void {
+  _workerConstructorOverride = fn;
 }
 
 let _nextThreadId = 1;
@@ -151,6 +163,14 @@ export const Worker = function Worker(
   this._terminated = false;
   this._isReffed = false;
 
+  // If a constructor override is installed (e.g. napi-rs WASI worker factory),
+  // delegate to it. It handles both WASI workers (real Web Workers) and
+  // standard workers (fallback to fork-based).
+  if (_workerConstructorOverride) {
+    _workerConstructorOverride(this, script, opts);
+    return;
+  }
+
   const scriptStr = typeof script === "string" ? script : script.href;
   const self = this;
 
@@ -256,6 +276,54 @@ Worker.prototype.getHeapSnapshot = function getHeapSnapshot(): Promise<unknown> 
   return Promise.resolve({});
 };
 
+// Support direct onmessage/onerror/onexit setters — napi-rs .wasi.cjs loaders
+// use `worker.onmessage = ({data}) => ...` instead of `.on('message', ...)`.
+// onmessage wraps the value in {data} to match the Web Worker MessageEvent shape,
+// since napi-rs expects `({data}) => ...` destructuring.
+{
+  const _onmessageSym = Symbol("onmessage");
+  const _onmessageWrapperSym = Symbol("onmessageWrapper");
+  Object.defineProperty(Worker.prototype, "onmessage", {
+    get() { return this[_onmessageSym] ?? null; },
+    set(fn: Function | null) {
+      // Remove previous wrapper
+      if (this[_onmessageWrapperSym]) this.off("message", this[_onmessageWrapperSym]);
+      this[_onmessageSym] = fn;
+      if (fn) {
+        // Wrap: emit {data} like Web Worker MessageEvent
+        const wrapper = (val: unknown) => fn({ data: val });
+        this[_onmessageWrapperSym] = wrapper;
+        this.on("message", wrapper);
+      } else {
+        this[_onmessageWrapperSym] = null;
+      }
+    },
+    configurable: true,
+  });
+
+  const _onerrorSym = Symbol("onerror");
+  Object.defineProperty(Worker.prototype, "onerror", {
+    get() { return this[_onerrorSym] ?? null; },
+    set(fn: Function | null) {
+      if (this[_onerrorSym]) this.off("error", this[_onerrorSym]);
+      this[_onerrorSym] = fn;
+      if (fn) this.on("error", fn);
+    },
+    configurable: true,
+  });
+
+  const _onexitSym = Symbol("onexit");
+  Object.defineProperty(Worker.prototype, "onexit", {
+    get() { return this[_onexitSym] ?? null; },
+    set(fn: Function | null) {
+      if (this[_onexitSym]) this.off("exit", this[_onexitSym]);
+      this[_onexitSym] = fn;
+      if (fn) this.on("exit", fn);
+    },
+    configurable: true,
+  });
+}
+
 
 export interface BroadcastChannel extends EventEmitter {
   name: string;
@@ -323,4 +391,5 @@ export default {
   getEnvironmentData,
   setEnvironmentData,
   setWorkerThreadForkCallback,
+  setWorkerConstructorOverride,
 };

@@ -30,6 +30,7 @@ createServer((req, res) => {
       'Content-Type': types[extname(file)] || 'application/octet-stream',
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'credentialless',
+      'Cache-Control': 'no-store',
     });
     res.end(content);
   } catch {
@@ -42,4 +43,5 @@ createServer((req, res) => {
   console.log(`  Brotli test:          http://localhost:${port}/examples/brotli-test/`);
   console.log(`  Child process test:   http://localhost:${port}/examples/child-process-test/`);
   console.log(`  Vite build test:      http://localhost:${port}/examples/vite-build-test/`);
+  console.log(`  Native WASI test:     http://localhost:${port}/examples/native-wasi-test/`);
 });

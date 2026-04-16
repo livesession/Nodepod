@@ -155,12 +155,19 @@ export class ExitStatus extends Error {
 /* ------------------------------------------------------------------ */
 /*  syscall wrapper                                                    */
 /* ---------------------------------------------------------------- */
+let _wasiSyscallErrorLogged = false;
 function syscall(target: Function): Function {
   return function (this: unknown, ...args: unknown[]): number {
     try {
       return target.apply(this, args);
     } catch (err: any) {
       if (err instanceof ExitStatus) throw err;
+      // Log the first syscall error to help debug WASM trap issues
+      if (!_wasiSyscallErrorLogged && err?.message?.includes("Memory not available")) {
+        _wasiSyscallErrorLogged = true;
+        console.error("[WASI] Syscall failed — memory not available:", err.message);
+        throw err; // Don't swallow memory errors — they cause unreachable traps
+      }
       // map common fs errors to WASI errno
       const code = err?.code;
       if (code === "ENOENT") return ERRNO_NOENT;
@@ -169,6 +176,10 @@ function syscall(target: Function): Function {
       if (code === "ENOTDIR") return ERRNO_NOTDIR;
       if (code === "ENOTEMPTY") return ERRNO_NOTEMPTY;
       if (code === "EACCES" || code === "EPERM") return ERRNO_ACCES;
+      if (!_wasiSyscallErrorLogged) {
+        _wasiSyscallErrorLogged = true;
+        console.error("[WASI] First syscall error:", err?.message || err, "code:", code);
+      }
       return ERRNO_IO;
     }
   };
@@ -276,10 +287,14 @@ export const WASI = function WASI(this: any, options?: WASIOptions) {
   const getMemory = (): WebAssembly.Memory => {
     if (memory) return memory;
     if (instance) {
-      memory = instance.exports.memory as WebAssembly.Memory;
+      memory = (instance as any).exports?.memory as WebAssembly.Memory;
       if (memory) return memory;
     }
-    throw new Error("WASI: WebAssembly.Memory not available");
+    // In napi-rs WASM, memory is imported (not exported). It should be set
+    // via initialize() or setMemory() before any syscalls run. If we get here,
+    // it means the initialization order is wrong.
+    console.error("[WASI] Memory not available — initialize() may not have been called yet");
+    throw new Error("WASI: WebAssembly.Memory not available — call initialize() or setMemory() first");
   };
 
   const view = () => new DataView(getMemory().buffer);
@@ -1235,8 +1250,18 @@ export const WASI = function WASI(this: any, options?: WASIOptions) {
     }),
 
     random_get: syscall((buf_ptr: number, buf_len: number): number => {
-      const slice = new Uint8Array(getMemory().buffer, buf_ptr, buf_len);
-      crypto.getRandomValues(slice);
+      const mem = getMemory();
+      if (mem.buffer instanceof SharedArrayBuffer) {
+        // crypto.getRandomValues() rejects SharedArrayBuffer-backed views
+        // (Web Crypto spec security restriction). Generate into a temporary
+        // non-shared buffer, then copy into shared memory.
+        const tmp = new Uint8Array(buf_len);
+        crypto.getRandomValues(tmp);
+        new Uint8Array(mem.buffer).set(tmp, buf_ptr);
+      } else {
+        const slice = new Uint8Array(mem.buffer, buf_ptr, buf_len);
+        crypto.getRandomValues(slice);
+      }
       return ERRNO_SUCCESS;
     }),
 
@@ -1253,7 +1278,8 @@ export const WASI = function WASI(this: any, options?: WASIOptions) {
 
   self.start = function start(wasmInstance: any): number {
     instance = wasmInstance;
-    memory = wasmInstance.exports.memory as WebAssembly.Memory;
+    // Memory can come from exports or be pre-set via imports (napi-rs --import-memory)
+    memory = wasmInstance.exports.memory as WebAssembly.Memory ?? memory;
 
     const _start = wasmInstance.exports._start;
     if (typeof _start !== "function") {
@@ -1284,12 +1310,31 @@ export const WASI = function WASI(this: any, options?: WASIOptions) {
 
   self.initialize = function initialize(wasmInstance: any): void {
     instance = wasmInstance;
-    memory = wasmInstance.exports.memory as WebAssembly.Memory;
-
-    const _initialize = wasmInstance.exports._initialize;
-    if (typeof _initialize === "function") {
-      _initialize();
+    // Memory can come from exports (normal) or be injected via imports (napi-rs --import-memory).
+    // emnapi wraps the instance and may add memory to exports even for imported memory.
+    const exportedMemory = wasmInstance?.exports?.memory as WebAssembly.Memory | undefined;
+    if (exportedMemory) {
+      memory = exportedMemory;
     }
+    console.log(`[WASI] initialize: memory=${memory ? 'set' : 'null'}, exports.memory=${exportedMemory ? 'yes' : 'no'}, _initialize=${typeof wasmInstance?.exports?._initialize}`);
+
+    const _initialize = wasmInstance?.exports?._initialize;
+    if (typeof _initialize === "function") {
+      try {
+        _initialize();
+      } catch (err: any) {
+        console.error("[WASI] _initialize() failed:", err?.message || err);
+        throw err;
+      }
+    }
+  };
+
+  // Allow external code (emnapi) to set the memory before instantiation.
+  // The .wasi.cjs loader creates SharedArrayBuffer-backed memory and passes it
+  // via overwriteImports → importObject.env.memory. emnapi may call this setter
+  // or the memory may already be set by reference through the import object.
+  self.setMemory = function setMemory(mem: WebAssembly.Memory): void {
+    memory = mem;
   };
 
   self.getImportObject = function getImportObject(): Record<

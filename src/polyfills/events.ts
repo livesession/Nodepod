@@ -41,6 +41,8 @@ function _bridgeVfsToWatcher(watcher: EventEmitter): void {
           watcher.emit('change', path);
         } else if (event === 'add') {
           watcher.emit('add', path);
+        } else if (event === 'addDir') {
+          watcher.emit('addDir', path);
         } else if (event === 'unlink') {
           watcher.emit('unlink', path);
         }

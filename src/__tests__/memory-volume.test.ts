@@ -440,4 +440,166 @@ describe("MemoryVolume", () => {
       expect(stats.isFile()).toBe(true);
     });
   });
+
+  // regression tests for issue #23. mkdir and a few other mutators were
+  // changing the tree without telling onGlobalChange subscribers, so anything
+  // tracking fs changes (HMR, vfs-bridge, user code) silently missed them
+  describe("onGlobalChange dispatch", () => {
+    it("fires 'addDir' when mkdirSync creates a directory", () => {
+      const vol = new MemoryVolume();
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.mkdirSync("/dir");
+
+      expect(events).toEqual([{ path: "/dir", event: "addDir" }]);
+    });
+
+    it("fires 'addDir' for every newly created segment with recursive:true", () => {
+      const vol = new MemoryVolume();
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.mkdirSync("/a/b/c", { recursive: true });
+
+      expect(events).toEqual([
+        { path: "/a", event: "addDir" },
+        { path: "/a/b", event: "addDir" },
+        { path: "/a/b/c", event: "addDir" },
+      ]);
+    });
+
+    it("stays silent when mkdirSync(recursive:true) hits an existing tree", () => {
+      const vol = new MemoryVolume();
+      vol.mkdirSync("/a/b/c", { recursive: true });
+
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.mkdirSync("/a/b/c", { recursive: true });
+      expect(events).toEqual([]);
+    });
+
+    it("fires only for missing segments when mkdirSync(recursive:true) partially exists", () => {
+      const vol = new MemoryVolume();
+      vol.mkdirSync("/a", { recursive: true });
+
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.mkdirSync("/a/b/c", { recursive: true });
+      expect(events).toEqual([
+        { path: "/a/b", event: "addDir" },
+        { path: "/a/b/c", event: "addDir" },
+      ]);
+    });
+
+    it("fires 'add' / 'change' for writeFileSync", () => {
+      const vol = new MemoryVolume();
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.writeFileSync("/f.txt", "hello");
+      vol.writeFileSync("/f.txt", "world");
+
+      expect(events).toEqual([
+        { path: "/f.txt", event: "add" },
+        { path: "/f.txt", event: "change" },
+      ]);
+    });
+
+    it("fires 'unlink' for unlinkSync", () => {
+      const vol = new MemoryVolume();
+      vol.writeFileSync("/f.txt", "data");
+
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.unlinkSync("/f.txt");
+      expect(events).toEqual([{ path: "/f.txt", event: "unlink" }]);
+    });
+
+    it("fires 'unlink' for rmdirSync", () => {
+      const vol = new MemoryVolume();
+      vol.mkdirSync("/dir");
+
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.rmdirSync("/dir");
+      expect(events).toEqual([{ path: "/dir", event: "unlink" }]);
+    });
+
+    it("fires 'change' for truncateSync", () => {
+      const vol = new MemoryVolume();
+      vol.writeFileSync("/f.txt", "hello world");
+
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.truncateSync("/f.txt", 5);
+      expect(events).toEqual([{ path: "/f.txt", event: "change" }]);
+    });
+
+    it("fires 'add' for symlinkSync", () => {
+      const vol = new MemoryVolume();
+      vol.writeFileSync("/target.txt", "target");
+
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.symlinkSync("/target.txt", "/link.txt");
+      expect(events).toEqual([{ path: "/link.txt", event: "add" }]);
+    });
+
+    it("fires 'add' for linkSync", () => {
+      const vol = new MemoryVolume();
+      vol.writeFileSync("/original.txt", "data");
+
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.linkSync("/original.txt", "/hardlink.txt");
+      expect(events).toEqual([{ path: "/hardlink.txt", event: "add" }]);
+    });
+
+    it("fires 'unlink' + 'add' for renameSync", () => {
+      const vol = new MemoryVolume();
+      vol.writeFileSync("/old.txt", "data");
+
+      const events: Array<{ path: string; event: string }> = [];
+      vol.onGlobalChange((path, event) => events.push({ path, event }));
+
+      vol.renameSync("/old.txt", "/new.txt");
+      expect(events).toContainEqual({ path: "/old.txt", event: "unlink" });
+      expect(events).toContainEqual({ path: "/new.txt", event: "add" });
+    });
+
+    it("onGlobalChange returns an unsubscribe fn", () => {
+      const vol = new MemoryVolume();
+      const events: Array<{ path: string; event: string }> = [];
+      const unsubscribe = vol.onGlobalChange((path, event) =>
+        events.push({ path, event }),
+      );
+
+      vol.mkdirSync("/a");
+      unsubscribe();
+      vol.mkdirSync("/b");
+
+      expect(events).toEqual([{ path: "/a", event: "addDir" }]);
+    });
+
+    it("also fires a parallel fs.watch event for mkdir", () => {
+      const vol = new MemoryVolume();
+      const watchEvents: Array<{ event: string; filename: string | null }> = [];
+      vol.watch("/", { recursive: true }, (event, filename) => {
+        watchEvents.push({ event, filename });
+      });
+
+      vol.mkdirSync("/dir");
+
+      // triggerWatchers uses Node's fs.watch vocabulary ('rename' / 'change')
+      expect(watchEvents).toEqual([{ event: "rename", filename: "dir" }]);
+    });
+  });
 });

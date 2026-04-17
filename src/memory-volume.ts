@@ -502,6 +502,36 @@ export class MemoryVolume {
     return current;
   }
 
+  // same as ensureDir but returns the list of segments it actually had to create,
+  // so mkdirSync(recursive: true) can fire one addDir per new dir and stay quiet
+  // about ones that already existed
+  private ensureDirTracked(p: string): { node: VolumeNode; created: string[] } {
+    const created: string[] = [];
+    if (p === '/') return { node: this.tree, created };
+    let current = this.tree;
+    let start = 1;
+    const len = p.length;
+    let currentPath = '';
+    while (start < len) {
+      let end = p.indexOf('/', start);
+      if (end === -1) end = len;
+      const seg = p.substring(start, end);
+      start = end + 1;
+      currentPath = currentPath + '/' + seg;
+      if (!current.children) current.children = new Map();
+      let child = current.children.get(seg);
+      if (!child) {
+        child = { kind: 'directory', children: new Map(), modified: Date.now() };
+        current.children.set(seg, child);
+        created.push(currentPath);
+      } else if (child.kind !== 'directory') {
+        throw new Error(`ENOTDIR: not a directory, '${p}'`);
+      }
+      current = child;
+    }
+    return { node: current, created };
+  }
+
   // ---- Internal write ----
 
   // expects pre-normalized path
@@ -660,7 +690,12 @@ export class MemoryVolume {
     const norm = this.normalize(p);
 
     if (options?.recursive) {
-      this.ensureDir(norm);
+      const { created } = this.ensureDirTracked(norm);
+      for (const path of created) {
+        if (this._handler) this._handler.invalidateStat(path);
+        this.triggerWatchers(path, 'rename');
+        this.notifyGlobalListeners(path, 'addDir');
+      }
       return;
     }
 
@@ -678,6 +713,10 @@ export class MemoryVolume {
       children: new Map(),
       modified: Date.now(),
     });
+
+    if (this._handler) this._handler.invalidateStat(norm);
+    this.triggerWatchers(norm, 'rename');
+    this.notifyGlobalListeners(norm, 'addDir');
   }
 
   readdirSync(p: string): string[] {
@@ -837,6 +876,10 @@ export class MemoryVolume {
       target: this.normalize(target),
       modified: Date.now(),
     });
+
+    if (this._handler) this._handler.invalidateStat(normLink);
+    this.triggerWatchers(normLink, 'rename');
+    this.notifyGlobalListeners(normLink, 'add');
   }
 
   readlinkSync(p: string): string {
@@ -869,6 +912,10 @@ export class MemoryVolume {
       content: existing.content,
       modified: existing.modified,
     });
+
+    if (this._handler) this._handler.invalidateStat(normNew);
+    this.triggerWatchers(normNew, 'rename');
+    this.notifyGlobalListeners(normNew, 'add');
   }
 
   chmodSync(_p: string, _mode: number): void {
@@ -910,6 +957,10 @@ export class MemoryVolume {
       node.content = bigger;
     }
     node.modified = Date.now();
+
+    if (this._handler) this._handler.invalidateStat(norm);
+    this.triggerWatchers(norm, 'change');
+    this.notifyGlobalListeners(norm, 'change');
   }
 
   // ---- Async wrappers ----

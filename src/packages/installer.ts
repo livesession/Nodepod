@@ -6,6 +6,7 @@ import { RegistryClient, RegistryConfig } from "./registry-client";
 import {
   resolveDependencyTree,
   resolveFromManifest,
+  type ResolveDiagnostics,
   ResolvedDependency,
   ResolutionConfig,
 } from "./version-resolver";
@@ -136,7 +137,7 @@ export class DependencyInstaller {
       onProgress,
     };
 
-    const tree = await resolveDependencyTree(
+    const { completed: tree, diagnostics } = await resolveDependencyTree(
       targetName,
       targetRange,
       resolutionOpts,
@@ -154,6 +155,9 @@ export class DependencyInstaller {
         );
       }
     }
+
+    // Write resolver diagnostics
+    this.writeDiagnostics(diagnostics);
 
     onProgress?.(`Installed ${tree.size} package(s)`);
 
@@ -215,7 +219,7 @@ export class DependencyInstaller {
       onProgress,
     };
 
-    const tree = await resolveFromManifest(manifest, resolutionOpts);
+    const { completed: tree, diagnostics } = await resolveFromManifest(manifest, resolutionOpts);
 
     const newPkgs = await this.materializePackages(tree, flags);
 
@@ -223,13 +227,15 @@ export class DependencyInstaller {
     if (this._snapshotCache && cacheKey && newPkgs.length > 0) {
       try {
         const snapshot = this.vol.toSnapshot();
-        // Filter to only node_modules entries to keep cache lean
         const nmSnapshot = {
           entries: snapshot.entries.filter(e => e.path.includes('/node_modules/')),
         };
         await this._snapshotCache.set(cacheKey, nmSnapshot);
       } catch { /* cache write failure is non-fatal */ }
     }
+
+    // Write resolver diagnostics
+    this.writeDiagnostics(diagnostics);
 
     onProgress?.(`Installed ${tree.size} package(s)`);
 
@@ -365,6 +371,17 @@ export class DependencyInstaller {
     this.writeLockFile(tree);
 
     return additions;
+  }
+
+  private writeDiagnostics(diagnostics: ResolveDiagnostics): void {
+    try {
+      const diagDir = path.join(this.workingDir, ".nodepod-diagnostics");
+      this.vol.mkdirSync(diagDir, { recursive: true });
+      this.vol.writeFileSync(
+        path.join(diagDir, "resolve-diagnostics.json"),
+        JSON.stringify(diagnostics, null, 2),
+      );
+    } catch { /* non-fatal */ }
   }
 
   private createBinStubs(

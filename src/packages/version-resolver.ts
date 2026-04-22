@@ -85,8 +85,25 @@ export function satisfiesRange(version: string, range: string): boolean {
   const sv = parseSemver(version);
   if (!sv) return false;
 
-  // pre-release versions only match ranges that explicitly include one
-  if (sv.prerelease && !range.includes("-")) return false;
+  // pre-release versions only match ranges that explicitly include a prerelease
+  // for the SAME major.minor.patch (npm semantics). e.g. 5.0.0-next.0 matches
+  // ^5.0.0-beta.0 but NOT >=4.0.0-beta.0 (different major.minor.patch)
+  if (sv.prerelease) {
+    // Extract the comparator version(s) from the range and check if any
+    // share the same major.minor.patch as the candidate
+    const rangeVersions = range.match(/\d+\.\d+\.\d+(?:-[^\s)]*)?/g) || [];
+    const hasMatchingPrerelease = rangeVersions.some((rv) => {
+      if (!rv.includes("-")) return false;
+      const rvParsed = parseSemver(rv);
+      return (
+        rvParsed &&
+        rvParsed.major === sv.major &&
+        rvParsed.minor === sv.minor &&
+        rvParsed.patch === sv.patch
+      );
+    });
+    if (!hasMatchingPrerelease) return false;
+  }
 
   range = range.trim();
 
@@ -255,6 +272,25 @@ function parseNpmAlias(range: string): { realName: string; realRange: string } |
 // requirers ask for incompatible versions of the same package, the second
 // one is nested under the requirer ("ember-cli/node_modules/find-up") so
 // Node's resolution walk finds the correct version from each consumer.
+export interface ResolveDiagnostics {
+  optionalDeps: Array<{
+    parent: string;
+    included: string[];
+    skipped: string[];
+    wasmAlts: string[];
+  }>;
+  skippedOptional: Array<{
+    name: string;
+    range: string;
+    reason: string;
+  }>;
+  errors: Array<{
+    name: string;
+    range: string;
+    error: string;
+  }>;
+}
+
 interface TreeWalkState {
   registry: RegistryClient;
   // placementKey → resolved dependency
@@ -266,6 +302,7 @@ interface TreeWalkState {
   // Per-placement resolution promises, to dedup concurrent nested installs.
   placementPromises: Map<string, Promise<void>>;
   config: ResolutionConfig;
+  diagnostics: ResolveDiagnostics;
 }
 
 function createState(
@@ -278,6 +315,7 @@ function createState(
     rootPromises: new Map(),
     placementPromises: new Map(),
     config,
+    diagnostics: { optionalDeps: [], skippedOptional: [], errors: [] },
   };
 }
 
@@ -290,7 +328,7 @@ export async function resolveDependencyTree(
   const state = createState(client, config);
 
   await walkDependency(rootName, versionRange, state);
-  return state.completed;
+  return { completed: state.completed, diagnostics: state.diagnostics };
 }
 
 export async function resolveFromManifest(
@@ -299,7 +337,7 @@ export async function resolveFromManifest(
     devDependencies?: Record<string, string>;
   },
   config: ResolutionConfig = {},
-): Promise<Map<string, ResolvedDependency>> {
+): Promise<{ completed: Map<string, ResolvedDependency>; diagnostics: ResolveDiagnostics }> {
   const client = config.registry || new RegistryClient();
   const state = createState(client, config);
 
@@ -312,7 +350,7 @@ export async function resolveFromManifest(
     await walkDependency(depName, depRange, state);
   }
 
-  return state.completed;
+  return { completed: state.completed, diagnostics: state.diagnostics };
 }
 
 // Recursively resolve a package and its transitive deps.
@@ -501,31 +539,52 @@ async function installPackageAt(
     Object.assign(edges, versionInfo.dependencies);
   }
 
+  // Track which edges are optional so failures can be swallowed
+  const optionalEdges = new Set<string>();
+
   if (versionInfo.optionalDependencies) {
+    const optEntries = Object.entries(versionInfo.optionalDependencies);
+
     if (state.config.optionalDependencies) {
-      Object.assign(edges, versionInfo.optionalDependencies);
+      for (const [optName, optRange] of optEntries) {
+        edges[optName] = optRange as string;
+        optionalEdges.add(optName);
+      }
     } else {
       // Always include wasm32-wasi optional deps — they're WASM alternatives
       // to native bindings and are the only variant that can run in-browser
       const optNames = Object.keys(versionInfo.optionalDependencies);
       let hasWasmVariant = false;
+      const included: string[] = [];
+      const skipped: string[] = [];
       for (const [optName, optRange] of Object.entries(versionInfo.optionalDependencies)) {
         if (optName.includes("wasm32-wasi") || optName.includes("wasm")) {
           edges[optName] = optRange as string;
+          optionalEdges.add(optName);
           hasWasmVariant = true;
+          included.push(optName);
+        } else {
+          skipped.push(optName);
         }
       }
+      state.diagnostics.optionalDeps.push({
+        parent: `${installName}@${chosenVersion}`,
+        included,
+        skipped,
+        wasmAlts: [],
+      });
 
       // generic napi-rs detection: if ALL optional deps are platform-specific
       // native bindings (contain OS/arch tags) but no WASM variant exists, try
-      // {pkg}-wasm32-wasi and {pkg}-wasm as alternatives. covers packages like
-      // lightningcss that ship a separate -wasm package. errors are swallowed
-      // since these may not exist on the registry
+      // {pkg}-wasm32-wasi and {pkg}-wasm as alternatives
       if (!hasWasmVariant && optNames.length >= 2) {
         const platformRe = /-(darwin|linux|win32|freebsd|android|sunos)-(x64|x86|arm64|arm|ia32|s390x|ppc64|mips|riscv)/;
         const allPlatform = optNames.every(n => platformRe.test(n));
         if (allPlatform) {
           const wasmAltsToTry = [installName + "-wasm32-wasi", installName + "-wasm"];
+          // Record the wasm alt attempt in diagnostics
+          const lastDiag = state.diagnostics.optionalDeps[state.diagnostics.optionalDeps.length - 1];
+          if (lastDiag) lastDiag.wasmAlts = wasmAltsToTry;
           await Promise.all(wasmAltsToTry.map(async (alt) => {
             try { await walkDependency(alt, "*", state, placementKey); } catch { /* package may not exist */ }
           }));
@@ -540,9 +599,27 @@ async function installPackageAt(
   for (let start = 0; start < edgeList.length; start += PARALLEL_LIMIT) {
     const chunk = edgeList.slice(start, start + PARALLEL_LIMIT);
     await Promise.all(
-      chunk.map(([childName, childRange]) =>
-        walkDependency(childName, childRange, state, placementKey),
-      ),
+      chunk.map(async ([childName, childRange]) => {
+        if (optionalEdges.has(childName)) {
+          // Optional deps — swallow errors like npm does
+          try {
+            await walkDependency(childName, childRange, state, placementKey);
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            state.diagnostics.skippedOptional.push({ name: childName, range: childRange, reason });
+          }
+        } else {
+          // Regular transitive deps — catch errors gracefully like npm
+          // (npm warns but continues; only top-level failures are fatal)
+          try {
+            await walkDependency(childName, childRange, state, placementKey);
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            console.warn(`[nodepod:resolve] Failed to resolve ${childName}@${childRange}: ${reason}`);
+            state.diagnostics.errors.push({ name: childName, range: childRange, reason });
+          }
+        }
+      }),
     );
   }
 

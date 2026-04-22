@@ -672,6 +672,7 @@ async function installPackages(
   ctx: ShellContext,
   pm: PkgManager = "npm",
 ): Promise<ShellResult> {
+  console.log(`[nodepod:install] Starting install, args:`, args, `cwd:`, ctx.cwd, `pm:`, pm);
   const { DependencyInstaller } = await import("../packages/installer");
   const installer = new DependencyInstaller(_vol!, { cwd: ctx.cwd });
   let out = "";
@@ -691,6 +692,7 @@ async function installPackages(
       const colored = formatProgress(m, pm);
       out += m + "\n";
       spinner.update(colored);
+      console.log(`[nodepod:install] ${m}`);
     };
 
     const isDev = args.some(
@@ -702,12 +704,14 @@ async function installPackages(
     );
 
     let totalAdded = 0;
+    let resolvedTree: Map<string, any> = new Map();
     if (names.length === 0) {
       const ir = await installer.installFromManifest(undefined, {
         withDevDeps: true,
         onProgress,
       });
       totalAdded = ir.newPackages.length;
+      resolvedTree = ir.resolved;
     } else {
       for (const n of names) {
         const ir = await installer.install(n, undefined, {
@@ -716,8 +720,38 @@ async function installPackages(
           onProgress,
         });
         totalAdded += ir.newPackages.length;
+        for (const [k, v] of ir.resolved) resolvedTree.set(k, v);
       }
     }
+
+    // Emit diagnostics — write to _vol and also to stdout with a marker
+    const treeDump: Record<string, any> = {};
+    for (const [name, dep] of resolvedTree) {
+      treeDump[name] = {
+        version: dep.version,
+        hasTarball: !!dep.tarballUrl,
+        dependencies: dep.dependencies || {},
+      };
+    }
+    const diagPayload = {
+      timestamp: new Date().toISOString(),
+      command: `${pm} install ${args.join(" ")}`,
+      cwd: ctx.cwd,
+      totalResolved: resolvedTree.size,
+      totalInstalled: totalAdded,
+      packages: treeDump,
+    };
+
+    try {
+      if (_vol) {
+        _vol.mkdirSync(ctx.cwd + "/.nodepod-diagnostics", { recursive: true });
+        _vol.writeFileSync(
+          ctx.cwd + "/.nodepod-diagnostics/last-install.json",
+          JSON.stringify(diagPayload, null, 2),
+        );
+      }
+    } catch { /* non-fatal */ }
+
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const summary = formatInstallSummary(totalAdded, elapsed, pm);
@@ -727,7 +761,37 @@ async function installPackages(
     return { stdout: out, stderr: "", exitCode: 0 };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[nodepod:install] Failed:`, e);
     spinner.fail(`${A_RED}${msg}${A_RESET}`);
+
+    // Write diagnostics even on failure so we can debug
+    console.error(`[nodepod:install] Writing error diagnostics, _vol=${!!_vol}, cwd=${ctx.cwd}`);
+    try {
+      if (_vol) {
+        const errorDiag = {
+          timestamp: new Date().toISOString(),
+          command: `${pm} install ${args.join(" ")}`,
+          cwd: ctx.cwd,
+          error: msg,
+          stack: e instanceof Error ? e.stack : undefined,
+          totalResolved: resolvedTree.size,
+          packages: Object.fromEntries(
+            [...resolvedTree].map(([name, dep]) => [name, {
+              version: dep.version,
+              hasTarball: !!dep.tarballUrl,
+            }])
+          ),
+        };
+        _vol.mkdirSync(ctx.cwd + "/.nodepod-diagnostics", { recursive: true });
+        _vol.writeFileSync(
+          ctx.cwd + "/.nodepod-diagnostics/last-install.json",
+          JSON.stringify(errorDiag, null, 2),
+        );
+      }
+    } catch (diagErr) {
+      console.error(`[nodepod:install] Diagnostics write FAILED:`, diagErr);
+    }
+
     return {
       stdout: out,
       stderr: formatErr(msg, pm),

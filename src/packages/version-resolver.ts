@@ -539,7 +539,9 @@ async function installPackageAt(
 
       // generic napi-rs detection: if ALL optional deps are platform-specific
       // native bindings (contain OS/arch tags) but no WASM variant exists, try
-      // {pkg}-wasm32-wasi and {pkg}-wasm as alternatives
+      // {pkg}-wasm32-wasi and {pkg}-wasm as alternatives. covers packages like
+      // lightningcss that ship a separate -wasm package. errors are swallowed
+      // since these may not exist on the registry
       if (!hasWasmVariant && optNames.length >= 2) {
         const platformRe = /-(darwin|linux|win32|freebsd|android|sunos)-(x64|x86|arm64|arm|ia32|s390x|ppc64|mips|riscv)/;
         const allPlatform = optNames.every(n => platformRe.test(n));

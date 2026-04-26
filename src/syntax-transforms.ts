@@ -221,7 +221,6 @@ export function collectEsmCjsPatches(
     } else if (node.type === "ExportAllDeclaration") {
       const src = node.source.value;
       if (node.exported) {
-        // export * as Name from "..."
         const name = node.exported.name || node.exported.value;
         patches.push([
           node.start,

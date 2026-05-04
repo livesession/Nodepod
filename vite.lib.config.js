@@ -63,12 +63,6 @@ function inlineProcessWorkerPlugin() {
 
 export default defineConfig({
   plugins: [wasm(), topLevelAwait(), inlineProcessWorkerPlugin()],
-  resolve: {
-    alias: {
-      // isomorphic-git does require('crypto') — resolve to our polyfill
-      crypto: resolve(__dirname, "src/polyfills/crypto.ts"),
-    },
-  },
   worker: {
     format: "es",
     rollupOptions: {
